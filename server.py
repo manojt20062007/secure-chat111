@@ -1,13 +1,12 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify
 from crypto_utils import encrypt_message, decrypt_message, hash_password
 import sqlite3
 import os
 
 app = Flask(__name__)
 DB_FILE = "users.db"
-CHAT_LOG = []
 
-# --- DB SETUP ---
+# Initialize DB with messages table
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -15,15 +14,19 @@ def init_db():
                     username TEXT PRIMARY KEY,
                     password TEXT NOT NULL
                 )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS messages (
+                    sender TEXT,
+                    receiver TEXT,
+                    message TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )""")
     conn.commit()
     conn.close()
 
-# --- HOME ---
 @app.route('/')
 def home():
-    return "✅ Secure Chat Server is Running (HTTP API)"
+    return "✅ Secure Chat Server is Running (E2E Chat Enabled)"
 
-# --- SIGNUP ---
 @app.route('/signup', methods=['POST'])
 def signup():
     data = request.json
@@ -33,9 +36,9 @@ def signup():
     if not username or not password:
         return jsonify({"status": "error", "message": "Missing fields"}), 400
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
     try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
         c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hash_password(password)))
         conn.commit()
         return jsonify({"status": "success", "message": "Signup successful"})
@@ -44,7 +47,6 @@ def signup():
     finally:
         conn.close()
 
-# --- LOGIN ---
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
@@ -62,49 +64,54 @@ def login():
     else:
         return jsonify({"status": "error", "message": "Invalid credentials"}), 401
 
-# --- SEND MESSAGE ---
 @app.route('/send', methods=['POST'])
 def send_message():
     data = request.json
-    username = data.get("username")
+    sender = data.get("sender")
+    receiver = data.get("receiver")
     message = data.get("message")
 
-    if not username or not message:
-        return jsonify({"status": "error", "message": "Missing data"}), 400
+    if not sender or not receiver or not message:
+        return jsonify({"status": "error", "message": "Missing fields"}), 400
 
-    encrypted = encrypt_message(f"{username}: {message}")
-    CHAT_LOG.append(encrypted)
-    return jsonify({"status": "success", "message": "Message received"})
+    encrypted = encrypt_message(message)
 
-# --- GET MESSAGES API ---
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (sender, receiver, message) VALUES (?, ?, ?)", (sender, receiver, encrypted))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "success", "message": "Message sent"})
+
 @app.route('/messages', methods=['GET'])
 def get_messages():
-    decrypted_messages = [decrypt_message(m) for m in CHAT_LOG]
-    return jsonify({"messages": decrypted_messages})
+    user1 = request.args.get("user1")
+    user2 = request.args.get("user2")
 
-# --- LIVE VIEW (AUTO REFRESH PAGE) ---
-@app.route('/live')
-def live_view():
-    messages_html = "<br>".join(decrypt_message(m) for m in CHAT_LOG)
-    return render_template_string(f"""
-        <html>
-        <head>
-            <title>Live Chat Messages</title>
-            <meta http-equiv="refresh" content="2">
-            <style>
-                body {{ font-family: Arial; padding: 20px; }}
-                h2 {{ color: #333; }}
-                .msg {{ margin: 5px 0; }}
-            </style>
-        </head>
-        <body>
-            <h2>🔴 Live Chat Feed (auto-refresh every 2s)</h2>
-            <div>{messages_html}</div>
-        </body>
-        </html>
-    """)
+    if not user1 or not user2:
+        return jsonify({"status": "error", "message": "Missing users"}), 400
 
-# --- MAIN ---
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""SELECT sender, receiver, message, timestamp FROM messages
+                 WHERE (sender = ? AND receiver = ?)
+                    OR (sender = ? AND receiver = ?)
+                 ORDER BY timestamp ASC""", (user1, user2, user2, user1))
+    rows = c.fetchall()
+    conn.close()
+
+    decrypted_messages = []
+    for sender, receiver, msg, ts in rows:
+        decrypted_messages.append({
+            "sender": sender,
+            "receiver": receiver,
+            "message": decrypt_message(msg),
+            "timestamp": ts
+        })
+
+    return jsonify({"status": "success", "messages": decrypted_messages})
+
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get("PORT", 8080))
