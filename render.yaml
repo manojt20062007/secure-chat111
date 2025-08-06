@@ -1,9 +1,9 @@
 services:
-  - type: worker
-    name: secure-chat-server
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+  - type: web
+    name: secure-chat
+    env: python
+    buildCommand: ""
+    startCommand: "python server.py"
     envVars:
       - key: PORT
         value: 8080
