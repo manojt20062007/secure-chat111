@@ -1,8 +1,9 @@
 import socket
 import threading
 import sqlite3
-from flask import Flask
+from flask import Flask, request, jsonify
 from crypto_utils import encrypt_message, decrypt_message, hash_password
+import os
 
 DB_FILE = "database.db"
 clients = {}
@@ -12,9 +13,39 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "Secure Chat Server is Running!"
+    return "✅ Secure Chat Server is Running (Socket + HTTP API)"
 
-# Initialize database
+# --- HTTP API: SIGNUP ---
+@app.route('/signup', methods=['POST'])
+def http_signup():
+    data = request.json
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"status": "error", "message": "Missing username or password"}), 400
+
+    if user_exists(username):
+        return jsonify({"status": "error", "message": "Username already exists"}), 409
+
+    if create_user(username, password):
+        return jsonify({"status": "success", "message": "Signup successful"})
+    else:
+        return jsonify({"status": "error", "message": "Signup failed"}), 500
+
+# --- HTTP API: LOGIN ---
+@app.route('/login', methods=['POST'])
+def http_login():
+    data = request.json
+    username = data.get("username")
+    password = data.get("password")
+
+    if verify_user(username, password):
+        return jsonify({"status": "success", "message": "Login successful"})
+    else:
+        return jsonify({"status": "error", "message": "Invalid credentials"}), 401
+
+# --- DB SETUP ---
 def init_db():
     conn = None
     try:
@@ -147,7 +178,8 @@ def start_server():
     server.listen()
     print("[+] Server running on 0.0.0.0:56789")
 
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=8080), daemon=True).start()
+    # Run Flask app in background
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))), daemon=True).start()
 
     while True:
         client, _ = server.accept()
